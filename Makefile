@@ -6,8 +6,8 @@ export PXF_MODULES
 PXF_VERSION ?= $(shell cat version)
 export PXF_VERSION
 
-FDW_SUPPORT = $(shell $(PG_CONFIG) --version | egrep "PostgreSQL 1[2-5]")
-FDW_SUPPORT =
+export SKIP_EXTERNAL_TABLE_BUILD_REASON
+export SKIP_FDW_BUILD_REASON
 
 SOURCE_EXTENSION_DIR = external-table
 TARGET_EXTENSION_DIR = gpextable
@@ -24,29 +24,31 @@ all: extensions cli server
 
 extensions: external-table fdw
 
-external-table cli server:
+external-table:
+ifeq ($(SKIP_EXTERNAL_TABLE_BUILD_REASON),)
 	@echo "===> Compiling [$@] module <==="
 	make -C $@
-
-fdw:
-ifneq ($(FDW_SUPPORT),)
-	make -C fdw
+else
+	@echo "Skipping building external-table extension because $(SKIP_EXTERNAL_TABLE_BUILD_REASON)"
 endif
 
-cli:
-	make -C cli
+ifeq ($(SKIP_FDW_BUILD_REASON),)
+	@echo "===> Compiling [$@] module <==="
+	make -C fdw
+else
+	@echo "Skipping building FDW extension because $(SKIP_FDW_BUILD_REASON)"
+endif
 
-server:
-	make -C server
+cli server:
+	@echo "===> Compiling [$@] module <==="
+	make -C $@
 
 clean:
 	rm -rf build
 	make -C $(SOURCE_EXTENSION_DIR) clean-all
 	make -C cli clean
 	make -C server clean
-ifneq ($(FDW_SUPPORT),)
 	make -C fdw clean
-endif
 
 test:
 ifeq ($(SKIP_FDW_BUILD_REASON),)
@@ -61,18 +63,30 @@ it:
 	make -C automation TEST=$(TEST)
 
 install:
-	make -C $(SOURCE_EXTENSION_DIR) install
-	make -C cli install
-	make -C server install
-ifneq ($(FDW_SUPPORT),)
-	make -C fdw install
+ifneq ($(SKIP_EXTERNAL_TABLE_BUILD_REASON),)
+	@echo "Skipping installing FDW extension because $(SKIP_EXTERNAL_TABLE_BUILD_REASON)"
+	$(eval PXF_MODULES := $(filter-out external-table,$(PXF_MODULES)))
 endif
+ifneq ($(SKIP_FDW_BUILD_REASON),)
+	@echo "Skipping installing FDW extension because $(SKIP_FDW_BUILD_REASON)"
+	$(eval PXF_MODULES := $(filter-out fdw,$(PXF_MODULES)))
+endif
+	set -e ;\
+	for module in $${PXF_MODULES[@]}; do \
+		echo "===> Installing [$${module}] module <===" ;\
+		make -C $${module} install ;\
+	done ;\
+	echo "===> PXF installation is complete <==="
 
 install-server:
 	make -C server install-server
 
 stage:
 	rm -rf build/stage
+ifneq ($(SKIP_EXTERNAL_TABLE_PACKAGE_REASON),)
+	@echo "Skipping staging FDW extension because $(SKIP_EXTERNAL_TABLE_PACKAGE_REASON)"
+	$(eval PXF_MODULES := $(filter-out external-table,$(PXF_MODULES)))
+endif
 ifneq ($(SKIP_FDW_PACKAGE_REASON),)
 	@echo "Skipping staging FDW extension because $(SKIP_FDW_PACKAGE_REASON)"
 	$(eval PXF_MODULES := $(filter-out fdw,$(PXF_MODULES)))
@@ -170,9 +184,9 @@ help:
 	@echo
 	@echo 'Possible targets'
 	@echo	'  - all - build extensions, cli, and server modules'
-	@echo	'  - extensions - build Greenplum external table and foreign data wrapper extensions'
-	@echo	'  - external-table - build Greenplum external table extension'
-	@echo	'  - fdw - build Greenplum foreign data wrapper extension'
+	@echo	'  - extensions - build Cloudberry external table and foreign data wrapper extensions'
+	@echo	'  - external-table - build Cloudberry external table extension'
+	@echo	'  - fdw - build Cloudberry foreign data wrapper extension'
 	@echo	'  - cli - install Go CLI dependencies and build Go CLI'
 	@echo	'  - server - install server dependencies and build server module'
 	@echo	'  - clean - clean up external-table, fdw, CLI and server binaries'
