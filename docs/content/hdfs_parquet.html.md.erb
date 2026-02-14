@@ -23,7 +23,7 @@ under the License.
 
 Use the PXF HDFS connector to read and write Parquet-format data. This section describes how to read and write HDFS files that are stored in Parquet format, including how to create, query, and insert into external tables that reference files in the HDFS data store.
 
-PXF supports reading or writing Parquet files compressed with these codecs: `snappy`, `gzip`, and `zstd`.
+PXF supports reading or writing Parquet files compressed with these codecs: `snappy`, `gzip`, 'lz4_raw' and `zstd`.
 
 PXF currently supports reading and writing primitive Parquet data types only.
 

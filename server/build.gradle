@@ -212,7 +212,7 @@ configure(javaProjects) {
                 entry("avro")
                 entry("avro-mapred")
             }
-            // Zstd support for Avro
+            // Zstd support for Avro/Parquet
             dependency("com.github.luben:zstd-jni:1.5.7-6")
 
             // Jackson 1.x dependencies
