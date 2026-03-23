@@ -292,13 +292,57 @@ CI/Test Templates:
    ci/singlecluster/templates/tez/conf/tez-site.xml
    ci/singlecluster/templates/usersync/install.properties
 
+
+The Greenplum Platform Extension Framework includes:
+
+----------------------------
+   Apache License - Version 2.0
+
+The following files and directories are licensed under the Apache License, Version 2.0:
+
+FDW Module:
+   fdw/
+
+External Table Module:
+   external-table/
+
+Server Module (Java Sources) and Configuration Files:
+   server/
+
+Documentation Templates:
+   docs/
+
+CI/Test Templates:
+   automation/
+   ci/
+
+CLI and Packaging:
+   cli/
+   package/
+
+Data Loading and Regression Tests:
+   load/
+   regression/
+
 =======================================================================
 
-This product bundles Gradle Wrapper, which is licensed under
-the Apache License, Version 2.0.
+Apache Cloudberry PXF includes codes from
 
-   Copyright © Gradle, Inc.
+----------------------------
+   Apache License - Version 2.0
 
-   server/gradle/wrapper/gradle-wrapper.jar
+      server/gradlew-install.sh
 
-=======================================================================
+      Copyright (C) 2024 Dremio
+
+      Licensed under the Apache License, Version 2.0 (the "License");
+      you may not use this file except in compliance with the License.
+      You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+      Unless required by applicable law or agreed to in writing, software
+      distributed under the License is distributed on an "AS IS" BASIS,
+      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+      See the License for the specific language governing permissions and
+      limitations under the License.
