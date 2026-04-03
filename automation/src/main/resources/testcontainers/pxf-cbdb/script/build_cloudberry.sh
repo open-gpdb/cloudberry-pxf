@@ -209,6 +209,3 @@ make install -C ~/workspace/cloudberry/contrib
 /usr/local/cloudberry-db/bin/postgres --gp-version
 /usr/local/cloudberry-db/bin/postgres --version
 ldd /usr/local/cloudberry-db/bin/postgres
-
-# cleanup build tree (reduce image size)
-make clean
