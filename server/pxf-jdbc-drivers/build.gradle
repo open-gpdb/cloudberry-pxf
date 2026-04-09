@@ -24,24 +24,4 @@ dependencies {
     // Clickhouse
     implementation('com.clickhouse:clickhouse-jdbc:0.9.8:all')                { transitive = false }
 
-    // DB2
-    implementation('net.sf.jt400:jt400:11.2')
-
-    // MySQL
-    implementation('mysql:mysql-connector-java:8.0.26')       { transitive = false }
-
-    // Snowflake
-    implementation('net.snowflake:snowflake-jdbc:3.13.9')
-
-    // Oracle
-    implementation('com.oracle.database.jdbc:ojdbc11:23.3.0.23.09')
-    implementation('com.oracle.database.jdbc:ucp11:23.3.0.23.09')
-    implementation('com.oracle.database.nls:orai18n:23.3.0.23.09')
-
-    // MSSQL
-    implementation('com.microsoft.sqlserver:mssql-jdbc:8.2.2.jre11')
-
-    // trino
-    implementation('io.trino:trino-jdbc:403')
-
 }
