@@ -518,8 +518,8 @@ section "Staging release: $TAG"
   export COPYFILE_DISABLE=1
   export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
 
-  # Keep -rcN in the artifact filename for RC voting, but keep the extracted
-  # top-level directory name as the main version with -incubating (without -rcN).
+  # Use base version (without -rcN) for both tarball filename and extracted directory name.
+  # This allows direct svn mv to release repository after voting without renaming.
   git archive --format=tar --prefix="apache-cloudberry-pxf-${VERSION_FILE}-incubating/" "$TAG" | tar -x -C "$TMP_DIR"
 
   # Archive submodules if any
