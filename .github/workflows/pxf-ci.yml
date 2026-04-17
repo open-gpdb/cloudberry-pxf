@@ -38,7 +38,7 @@ concurrency:
 env:
   JAVA_VERSION: "11"
   JAVA_HOME: "/usr/lib/jvm/java-11-openjdk"
-  GO_VERSION: "1.21"
+  GO_VERSION: "1.24"
   GPHOME: "/usr/local/cloudberry-db"
   CLOUDBERRY_VERSION: "main"
   PXF_HOME: "/usr/local/pxf"
@@ -52,7 +52,21 @@ jobs:
       image: apache/incubator-cloudberry:cbdb-build-ubuntu22.04-latest
       options: --user root
     steps:
+    - name: Get month number
+      id: get-month
+      run: echo "month=$(/bin/date -u '+%Y-%m')" >> "$GITHUB_OUTPUT"
+
+    - name: Restore DEB cache
+      id: cache-deb
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          workspace/cloudberry-deb
+          workspace/cloudberry-source.tar.gz
+        key: cloudberry-deb-${{ runner.os }}-${{ steps.get-month.outputs.month }}
+
     - name: Checkout Cloudberry source
+      if: steps.cache-deb.outputs.cache-hit != 'true'
       uses: actions/checkout@v4
       with:
         repository: apache/cloudberry
@@ -61,11 +75,13 @@ jobs:
         submodules: true
 
     - name: Checkout PXF source (for build script)
+      if: steps.cache-deb.outputs.cache-hit != 'true'
       uses: actions/checkout@v4
       with:
         path: cloudberry-pxf
 
     - name: Build Cloudberry DEB
+      if: steps.cache-deb.outputs.cache-hit != 'true'
       run: |
         export WORKSPACE=$PWD/workspace
         export CLOUDBERRY_VERSION=99.0.0
@@ -73,9 +89,20 @@ jobs:
         bash cloudberry-pxf/ci/docker/pxf-cbdb-dev/ubuntu/script/build_cloudberry_deb.sh
 
     - name: Package Cloudberry source
+      if: steps.cache-deb.outputs.cache-hit != 'true'
       run: |
         cd workspace
         tar czf cloudberry-source.tar.gz cloudberry/
+
+    - name: Save DEB cache
+      # save cache from default branch only (this cache can be reused between PRs)
+      if: steps.cache-deb.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          workspace/cloudberry-deb
+          workspace/cloudberry-source.tar.gz
+        key: cloudberry-deb-${{ runner.os }}-${{ steps.get-month.outputs.month }}
 
     - name: Upload DEB artifact
       uses: actions/upload-artifact@v4
@@ -98,7 +125,21 @@ jobs:
       image: apache/incubator-cloudberry:cbdb-build-rocky9-latest
       options: --user root
     steps:
+    - name: Get month number
+      id: get-month
+      run: echo "month=$(/bin/date -u '+%Y-%m')" >> "$GITHUB_OUTPUT"
+
+    - name: Restore RPM cache
+      id: cache-rpm
+      uses: actions/cache/restore@v4
+      with:
+        path: |
+          workspace/cloudberry-rpm
+          workspace/cloudberry-source-rocky9.tar.gz
+        key: cloudberry-rpm-${{ runner.os }}-${{ steps.get-month.outputs.month }}
+
     - name: Checkout Cloudberry source
+      if: steps.cache-rpm.outputs.cache-hit != 'true'
       uses: actions/checkout@v4
       with:
         repository: apache/cloudberry
@@ -107,11 +148,13 @@ jobs:
         submodules: true
 
     - name: Checkout PXF source (for build script)
+      if: steps.cache-rpm.outputs.cache-hit != 'true'
       uses: actions/checkout@v4
       with:
         path: cloudberry-pxf
 
     - name: Build Cloudberry RPM
+      if: steps.cache-rpm.outputs.cache-hit != 'true'
       run: |
         export WORKSPACE=$PWD/workspace
         export CLOUDBERRY_VERSION=99.0.0
@@ -119,9 +162,20 @@ jobs:
         bash cloudberry-pxf/ci/docker/pxf-cbdb-dev/rocky9/script/build_cloudberry_rpm.sh
 
     - name: Package Cloudberry source
+      if: steps.cache-rpm.outputs.cache-hit != 'true'
       run: |
         cd workspace
         tar czf cloudberry-source-rocky9.tar.gz cloudberry/
+
+    - name: Save RPM cache
+      # save cache from default branch only (this cache can be reused between PRs)
+      if: steps.cache-rpm.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+      uses: actions/cache/save@v4
+      with:
+        path: |
+          workspace/cloudberry-rpm
+          workspace/cloudberry-source-rocky9.tar.gz
+        key: cloudberry-rpm-${{ runner.os }}-${{ steps.get-month.outputs.month }}
 
     - name: Upload RPM artifact
       uses: actions/upload-artifact@v4
@@ -197,6 +251,59 @@ jobs:
         name: singlecluster-rocky9-image
         path: /tmp/singlecluster-rocky9-image.tar
         retention-days: 1
+
+  build-pxf-cbdb-testcontainer-image:
+    name: Build Testcontainer Images (${{ matrix.distro }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - distro: ubuntu
+            base_image: apache/incubator-cloudberry:cbdb-build-ubuntu22.04-latest
+            image_tag: pxf/cbdb-testcontainer-ubuntu:1
+          - distro: rocky9
+            base_image: apache/incubator-cloudberry:cbdb-build-rocky9-latest
+            image_tag: pxf/cbdb-testcontainer-rocky9:1
+    steps:
+      - name: Get month number
+        id: get-month
+        run: echo "month=$(/bin/date -u '+%Y-%m')" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout PXF source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Restore testcontainer image cache
+        id: cache-tc
+        uses: actions/cache/restore@v4
+        with:
+          path: pxf-cbdb-testcontainer-${{ matrix.distro }}.tar
+          key: pxf-cbdb-testcontainer-${{ matrix.distro }}-${{ steps.get-month.outputs.month }}-${{ hashFiles('automation/src/main/resources/testcontainers/pxf-cbdb/**') }}
+
+      - name: Build testcontainer images
+        if: steps.cache-tc.outputs.cache-hit != 'true'
+        run: |
+          docker build \
+            --build-arg BASE_IMAGE=${{ matrix.base_image }} \
+            -t ${{ matrix.image_tag }} \
+            automation/src/main/resources/testcontainers/pxf-cbdb
+          docker save ${{ matrix.image_tag }} > "${GITHUB_WORKSPACE}/pxf-cbdb-testcontainer-${{ matrix.distro }}.tar"
+
+      - name: Save testcontainer image cache
+        # save cache from default branch only (reuse between PRs for the same month and context)
+        if: steps.cache-tc.outputs.cache-hit != 'true' && github.ref == 'refs/heads/main'
+        uses: actions/cache/save@v4
+        with:
+          path: pxf-cbdb-testcontainer-${{ matrix.distro }}.tar
+          key: pxf-cbdb-testcontainer-${{ matrix.distro }}-${{ steps.get-month.outputs.month }}-${{ hashFiles('automation/src/main/resources/testcontainers/pxf-cbdb/**') }}
+
+      - name: Upload testcontainer images
+        uses: actions/upload-artifact@v4
+        with:
+          name: pxf-cbdb-testcontainer-image-${{ matrix.distro }}
+          path: pxf-cbdb-testcontainer-${{ matrix.distro }}.tar
+          retention-days: 1
 
   # Stage 2: Parallel test jobs using matrix strategy
   pxf-test:
@@ -277,7 +384,6 @@ jobs:
       run: |
         cd cloudberry-pxf
         docker compose -f ci/docker/pxf-cbdb-dev/ubuntu/docker-compose.yml down -v || true
-        docker compose -f ci/docker/pxf-cbdb-dev/ubuntu/docker-compose.yml build
         docker compose -f ci/docker/pxf-cbdb-dev/ubuntu/docker-compose.yml up -d
         docker exec pxf-cbdb-dev sudo chown -R gpadmin:gpadmin /home/gpadmin/workspace/cloudberry
         docker cp /tmp/*.deb pxf-cbdb-dev:/tmp/
@@ -449,7 +555,6 @@ jobs:
       run: |
         cd cloudberry-pxf
         docker compose -f ci/docker/pxf-cbdb-dev/rocky9/docker-compose.yml down -v || true
-        docker compose -f ci/docker/pxf-cbdb-dev/rocky9/docker-compose.yml build
         docker compose -f ci/docker/pxf-cbdb-dev/rocky9/docker-compose.yml up -d
         docker exec pxf-cbdb-dev sudo chown -R gpadmin:gpadmin /home/gpadmin/workspace/cloudberry
         docker cp /tmp/*.rpm pxf-cbdb-dev:/tmp/
@@ -541,10 +646,123 @@ jobs:
           exit 1
         fi
 
+
+  # Stage 2c: Testcontainers-based tests
+  pxf-testcontainer-test:
+    name: "TC Test - ${{ matrix.tc_group }} (${{ matrix.use_fdw == 'true' && 'fdw' || 'external-table' }}, ${{ matrix.distro }})"
+    needs: [build-pxf-cbdb-testcontainer-image]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        tc_group:
+          - 'pxf-jdbc'
+        use_fdw:
+          - 'false'
+          - 'true'
+        distro:
+          - 'ubuntu'
+          - 'rocky9'
+    steps:
+      - name: Checkout PXF source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: true
+
+      - name: Set up JDK ${{ env.JAVA_VERSION }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Download pxf-cbdb testcontainer image
+        uses: actions/download-artifact@v4
+        with:
+          name: pxf-cbdb-testcontainer-image-${{ matrix.distro }}
+          path: /tmp
+
+      - name: Load pxf-cbdb testcontainer image
+        run: |
+          docker load < /tmp/pxf-cbdb-testcontainer-${{ matrix.distro }}.tar
+
+      - name: Build PXF stage artifacts (no unit tests)
+        run: |
+          make -C server stage-notest
+
+      - name: Run Testcontainers tests - ${{ matrix.tc_group }} (${{ matrix.use_fdw == 'true' && 'fdw' || 'external-table' }}, ${{ matrix.distro }})
+        id: run_test
+        continue-on-error: true
+        timeout-minutes: 120
+        working-directory: automation
+        env:
+          PXF_HOME: ${{ github.workspace }}/server/build/stage
+        run: |
+          make test-tc TC_GROUP=${{ matrix.tc_group }} USE_FDW=${{ matrix.use_fdw }} DISTRO=${{ matrix.distro }}
+
+      - name: Collect artifacts and generate stats
+        if: always()
+        id: collect_artifacts
+        run: |
+          mkdir -p artifacts/logs
+          TC_GROUP="${{ matrix.tc_group }}"
+          TEST_MODE="${{ matrix.use_fdw == 'true' && 'fdw' || 'external-table' }}"
+          TEST_RESULT="${{ steps.run_test.outcome }}"
+
+          # Copy test artifacts
+          cp -r automation/automation_logs/* artifacts/ 2>/dev/null || true
+
+          TOTAL=0; PASSED=0; FAILED=0; SKIPPED=0
+          for xml in automation/target/surefire-reports/TEST-*.xml; do
+            if [ -f "$xml" ]; then
+              tests=$(grep -oP 'tests="\K\d+' "$xml" 2>/dev/null | head -1 || echo "0")
+              failures=$(grep -oP 'failures="\K\d+' "$xml" 2>/dev/null | head -1 || echo "0")
+              errors=$(grep -oP 'errors="\K\d+' "$xml" 2>/dev/null | head -1 || echo "0")
+              skipped=$(grep -oP 'skipped="\K\d+' "$xml" 2>/dev/null | head -1 || echo "0")
+              TOTAL=$((TOTAL + tests))
+              FAILED=$((FAILED + failures + errors))
+              SKIPPED=$((SKIPPED + skipped))
+            fi
+          done
+          PASSED=$((TOTAL - FAILED - SKIPPED))
+
+          cat > artifacts/test_stats.json <<EOF
+          {
+            "group": "$TC_GROUP:$TEST_MODE:${{ matrix.distro }}",
+            "result": "$TEST_RESULT",
+            "total": $TOTAL,
+            "passed": $PASSED,
+            "failed": $FAILED,
+            "skipped": $SKIPPED
+          }
+          EOF
+
+          echo "failed_count=$FAILED" >> $GITHUB_OUTPUT
+          echo "skipped_count=$SKIPPED" >> $GITHUB_OUTPUT
+          echo "Test stats for tc:$TC_GROUP ($TEST_MODE, ${{ matrix.distro }}): total=$TOTAL, passed=$PASSED, failed=$FAILED, skipped=$SKIPPED"
+
+      - name: Upload test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results-tc-${{ matrix.tc_group }}-${{ matrix.use_fdw == 'true' && 'fdw' || 'external-table' }}-${{ matrix.distro }}
+          path: artifacts/**
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Check test result
+        if: always()
+        run: |
+          FAILED_COUNT="${{ steps.collect_artifacts.outputs.failed_count || 0 }}"
+          if [ "${{ steps.run_test.outcome }}" == "failure" ] || [ "$FAILED_COUNT" -gt 0 ]; then
+            echo "Testcontainer test ${{ matrix.tc_group }} (${{ matrix.test_mode }}, ${{ matrix.distro }}) failed (Failures: $FAILED_COUNT)"
+            exit 1
+          fi
+
   # Stage 3: Summary job
   test-summary:
     name: Test Summary
-    needs: [pxf-test, pxf-test-rocky9]
+    needs: [pxf-test, pxf-test-rocky9, pxf-testcontainer-test]
     if: always()
     runs-on: ubuntu-latest
     steps:
