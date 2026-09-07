@@ -470,7 +470,7 @@ PxfGetOptions(Oid foreigntableid)
 			copy_options = lappend(copy_options, def);
 		else
 		{
-			Value	   *val = makeString(def->defname);
+			Node	   *val = (Node *) makeString(def->defname);
 
 			/*
 			 * if we have already seen this option before disregard the new

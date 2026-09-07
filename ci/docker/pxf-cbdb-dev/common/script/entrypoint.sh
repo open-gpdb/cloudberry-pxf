@@ -198,17 +198,59 @@ install_build_deps() {
   fi
 }
 
+verify_cloudberry_install() {
+  local actual_version actual_pg_major
+  actual_version=$(/usr/local/cloudberry-db/bin/pg_config --version)
+  actual_pg_major=${actual_version#* }
+  actual_pg_major=${actual_pg_major%%.*}
+
+  log "installed Cloudberry reports ${actual_version}"
+  /usr/local/cloudberry-db/bin/postgres --gp-version
+
+  local ref_file=/tmp/cloudberry-build.ref
+  local sha_file=/tmp/cloudberry-build.sha
+  local pg_major_file=/tmp/cloudberry-build.pg-major
+  if [ ! -e "$ref_file" ] && [ ! -e "$sha_file" ] && [ ! -e "$pg_major_file" ]; then
+    log "Cloudberry build identity is unavailable; skipping expected-version check"
+    return
+  fi
+
+  [ -r "$ref_file" ] || die "Missing Cloudberry build identity: $ref_file"
+  [ -r "$sha_file" ] || die "Missing Cloudberry build identity: $sha_file"
+  [ -r "$pg_major_file" ] || die "Missing Cloudberry build identity: $pg_major_file"
+
+  local expected_ref expected_sha expected_pg_major actual_sha
+  expected_ref=$(<"$ref_file")
+  expected_sha=$(<"$sha_file")
+  expected_pg_major=$(<"$pg_major_file")
+  [ "$actual_pg_major" = "$expected_pg_major" ] ||
+    die "Expected PostgreSQL ${expected_pg_major} from ${expected_ref}, got ${actual_version}"
+
+  if git -C /home/gpadmin/workspace/cloudberry rev-parse HEAD >/dev/null 2>&1; then
+    actual_sha=$(git -C /home/gpadmin/workspace/cloudberry rev-parse HEAD)
+    [ "$actual_sha" = "$expected_sha" ] ||
+      die "Cloudberry package/source mismatch: expected ${expected_sha}, got ${actual_sha}"
+  fi
+  log "verified Cloudberry ref=${expected_ref} commit=${expected_sha} pg_major=${expected_pg_major}"
+}
+
 install_cloudberry_from_package() {
   log "installing Cloudberry from package"
 
-  local pkg_file=""
+  local package_pattern
   if [ "$OS_FAMILY" = "deb" ]; then
-    pkg_file=$(find /tmp -name "apache-cloudberry-db*.deb" 2>/dev/null | head -1)
-    [ -z "$pkg_file" ] && die "No .deb package found in /tmp"
+    package_pattern="apache-cloudberry-db*.deb"
   else
-    pkg_file=$(find /tmp -name "apache-cloudberry-db*.rpm" 2>/dev/null | head -1)
-    [ -z "$pkg_file" ] && die "No .rpm package found in /tmp"
+    package_pattern="apache-cloudberry-db*.rpm"
   fi
+
+  local -a package_files=()
+  mapfile -t package_files < <(find /tmp -maxdepth 1 -type f -name "$package_pattern" -print)
+  if [ "${#package_files[@]}" -ne 1 ]; then
+    find /tmp -maxdepth 1 -type f -name "$package_pattern" -print || true
+    die "Expected exactly one Cloudberry package matching ${package_pattern}, found ${#package_files[@]}"
+  fi
+  local pkg_file=${package_files[0]}
 
   install_build_deps
 
@@ -254,6 +296,7 @@ EOF
 
   # Initialize and start Cloudberry cluster
   source /usr/local/cloudberry-db/cloudberry-env.sh
+  verify_cloudberry_install
   make create-demo-cluster -C ~/workspace/cloudberry || {
     log "create-demo-cluster failed, trying manual setup"
     cd ~/workspace/cloudberry
