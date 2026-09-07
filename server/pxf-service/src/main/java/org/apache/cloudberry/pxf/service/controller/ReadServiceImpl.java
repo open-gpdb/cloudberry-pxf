@@ -3,6 +3,7 @@ package org.apache.cloudberry.pxf.service.controller;
 import com.google.common.io.CountingOutputStream;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang.StringUtils;
+import org.apache.cloudberry.pxf.api.error.PxfRuntimeException;
 import org.apache.cloudberry.pxf.api.io.Writable;
 import org.apache.cloudberry.pxf.api.model.ConfigurationFactory;
 import org.apache.cloudberry.pxf.api.model.Fragment;
@@ -11,6 +12,7 @@ import org.apache.cloudberry.pxf.api.model.RequestContext;
 import org.apache.cloudberry.pxf.api.utilities.Utilities;
 import org.apache.cloudberry.pxf.service.FragmenterService;
 import org.apache.cloudberry.pxf.service.MetricsReporter;
+import org.apache.cloudberry.pxf.service.activity.ActiveRequestRegistry;
 import org.apache.cloudberry.pxf.service.bridge.Bridge;
 import org.apache.cloudberry.pxf.service.bridge.BridgeFactory;
 import org.apache.cloudberry.pxf.service.security.SecurityService;
@@ -35,18 +37,20 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
     /**
      * Creates a new instance.
      *
-     * @param configurationFactory configuration factory
-     * @param bridgeFactory        bridge factory
-     * @param securityService      security service
-     * @param fragmenterService    fragmenter service
-     * @param metricsReporter      metrics reporter service
+     * @param configurationFactory  configuration factory
+     * @param bridgeFactory         bridge factory
+     * @param securityService       security service
+     * @param fragmenterService     fragmenter service
+     * @param metricsReporter       metrics reporter service
+     * @param activeRequestRegistry registry of in-flight requests
      */
     public ReadServiceImpl(ConfigurationFactory configurationFactory,
                            BridgeFactory bridgeFactory,
                            SecurityService securityService,
                            FragmenterService fragmenterService,
-                           MetricsReporter metricsReporter) {
-        super("Read", configurationFactory, bridgeFactory, securityService, metricsReporter);
+                           MetricsReporter metricsReporter,
+                           ActiveRequestRegistry activeRequestRegistry) {
+        super("Read", configurationFactory, bridgeFactory, securityService, metricsReporter, activeRequestRegistry);
         this.fragmenterService = fragmenterService;
     }
 
@@ -84,6 +88,13 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
         try {
             List<Fragment> fragments = fragmenterService.getFragmentsForSegment(context);
             for (int i = 0; i < fragments.size(); i++) {
+                // stop before starting the next fragment if the request was
+                // cancelled via pxf_cancel_backend
+                if (isCancelled()) {
+                    throw new PxfRuntimeException(String.format(
+                            "Read of resource %s cancelled by pxf_cancel_backend after %d of %d fragments",
+                            context.getDataSource(), i, fragments.size()));
+                }
                 Fragment fragment = fragments.get(i);
                 sourceName = fragment.getSourceName();
                 String profile = fragment.getProfile();
@@ -148,18 +159,22 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
         Bridge bridge = null;
         try {
             bridge = getBridge(context);
+            // expose the bridge so pxf_cancel_backend can end it mid-read
+            attachBridge(bridge);
+            throwIfCancelled(context);
             if (!bridge.beginIteration()) {
                 log.debug("Skipping streaming fragment {} of resource {}",
                         context.getFragmentIndex(), context.getDataSource());
             } else {
                 log.debug("Starting streaming fragment {} of resource {}",
                         context.getFragmentIndex(), context.getDataSource());
-                while ((record = bridge.getNext()) != null) {
+                while (!isCancelled() && (record = bridge.getNext()) != null) {
                     record.write(dos);
                     // fragment's current byte count is relative to the previous stream's byte count
                     fragmentStats.reportCompletedRecord(countingOutputStream.getCount() - previousStreamByteCount);
                 }
             }
+            throwIfCancelled(context);
             success = true;
         } finally {
             if (bridge != null) {
@@ -167,6 +182,9 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
                     bridge.endIteration();
                 } catch (Exception e) {
                     log.warn("Ignoring error encountered during bridge.endIteration()", e);
+                } finally {
+                    // stop exposing the now-closed bridge to pxf_cancel_backend
+                    attachBridge(null);
                 }
             }
             Duration duration = Duration.between(startTime, Instant.now());
@@ -184,6 +202,14 @@ public class ReadServiceImpl extends BaseServiceImpl<OperationStats> implements 
             log.debug("Finished processing fragment {} of resource {} in {} ms, wrote {} records and {} bytes.",
                     context.getFragmentIndex(), context.getDataSource(), duration.toMillis(), fragmentStats.getRecordCount(), fragmentStats.getByteCount());
             metricsReporter.reportTimer(MetricsReporter.PxfMetric.FRAGMENTS_SENT, duration, context, success);
+        }
+    }
+
+    private void throwIfCancelled(RequestContext context) {
+        if (isCancelled()) {
+            throw new PxfRuntimeException(String.format(
+                    "Read of resource %s cancelled by pxf_cancel_backend",
+                    context.getDataSource()));
         }
     }
 

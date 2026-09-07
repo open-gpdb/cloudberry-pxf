@@ -64,8 +64,20 @@ setup_locale_and_packages() {
     sudo locale-gen en_US.UTF-8 ru_RU.CP1251 ru_RU.UTF-8
     sudo update-locale LANG=en_US.UTF-8
   else
+    # RHEL/Rocky 10 dropped OpenJDK 8 and 11 from its repos (only 21/25 remain).
+    # The image already ships both from Adoptium under the /usr/lib/jvm names
+    # detect_java_paths() expects, so only ask dnf for them on 9 and older.
+    local rpm_jdk_pkgs="java-11-openjdk-headless java-1.8.0-openjdk-headless"
+    if [ -r /etc/os-release ]; then
+      local os_major
+      os_major=$(. /etc/os-release && echo "${VERSION_ID%%.*}")
+      if [ -n "$os_major" ] && [ "$os_major" -ge 10 ] 2>/dev/null; then
+        rpm_jdk_pkgs=""
+      fi
+    fi
+    # shellcheck disable=SC2086 # word splitting is intended for the package list
     retry sudo dnf install -y --nobest wget maven unzip openssh-server iproute sudo \
-      java-11-openjdk-headless java-1.8.0-openjdk-headless \
+      $rpm_jdk_pkgs \
       glibc-langpack-en glibc-locale-source
     sudo localedef -c -i en_US -f UTF-8 en_US.UTF-8 || true
     sudo localedef -c -i ru_RU -f UTF-8 ru_RU.UTF-8 || true
@@ -88,11 +100,23 @@ setup_ssh() {
   sudo ssh-keygen -A
   sudo bash -c 'echo "PasswordAuthentication yes" >> /etc/ssh/sshd_config'
   sudo mkdir -p /etc/ssh/sshd_config.d
-  sudo bash -c 'cat >/etc/ssh/sshd_config.d/pxf-automation.conf <<EOF
+  # OpenSSH 9.8+ (RHEL/Rocky 10 ships 9.9) removed DSA altogether. Naming ssh-dss
+  # there makes sshd reject the whole file with "Bad key types" and refuse to
+  # start, so only ask for the key types the local sshd still knows about.
+  local key_algs=ssh-rsa
+  if ssh -Q key 2>/dev/null | grep -qx ssh-dss; then
+    key_algs=ssh-rsa,ssh-dss
+  fi
+  log "sshd key types: ${key_algs}"
+  # Must sort before 40-redhat-crypto-policies.conf: sshd keeps the FIRST value
+  # it obtains for a keyword, so a drop-in read after the crypto-policy include
+  # is silently ignored. That is why Rocky 10 never actually offered ssh-rsa.
+  sudo rm -f /etc/ssh/sshd_config.d/pxf-automation.conf
+  sudo bash -c "cat >/etc/ssh/sshd_config.d/01-pxf-automation.conf <<EOF
 KexAlgorithms +diffie-hellman-group-exchange-sha1,diffie-hellman-group14-sha1,diffie-hellman-group1-sha1
-HostKeyAlgorithms +ssh-rsa,ssh-dss
-PubkeyAcceptedAlgorithms +ssh-rsa,ssh-dss
-EOF'
+HostKeyAlgorithms +${key_algs}
+PubkeyAcceptedAlgorithms +${key_algs}
+EOF"
   if [ "$OS_FAMILY" = "deb" ]; then
     sudo usermod -a -G sudo gpadmin
   else
@@ -115,7 +139,17 @@ EOF'
   # Ensure privilege separation user exists (required by Rocky 9 sshd)
   id sshd &>/dev/null || sudo useradd -r -d /var/empty/sshd -s /sbin/nologin sshd 2>/dev/null || true
   sudo mkdir -p /var/empty/sshd && sudo chmod 0755 /var/empty/sshd
-  sudo /usr/sbin/sshd -E /tmp/sshd.log || die "Failed to start sshd, check /tmp/sshd.log"
+  # Validate first: a rejected directive makes sshd exit without writing -E log,
+  # which otherwise leaves nothing to go on but "Failed to start sshd".
+  if ! sudo /usr/sbin/sshd -t 2>/tmp/sshd-config-test.log; then
+    log "ERROR sshd rejected its configuration:"
+    cat /tmp/sshd-config-test.log 2>/dev/null || true
+    die "invalid sshd configuration"
+  fi
+  sudo /usr/sbin/sshd -E /tmp/sshd.log || {
+    cat /tmp/sshd.log 2>/dev/null || true
+    die "Failed to start sshd, check /tmp/sshd.log"
+  }
   sleep 1
   if ! ss -tlnp | grep -q ':22 '; then
     log "ERROR: sshd is not listening on port 22"
@@ -164,17 +198,59 @@ install_build_deps() {
   fi
 }
 
+verify_cloudberry_install() {
+  local actual_version actual_pg_major
+  actual_version=$(/usr/local/cloudberry-db/bin/pg_config --version)
+  actual_pg_major=${actual_version#* }
+  actual_pg_major=${actual_pg_major%%.*}
+
+  log "installed Cloudberry reports ${actual_version}"
+  /usr/local/cloudberry-db/bin/postgres --gp-version
+
+  local ref_file=/tmp/cloudberry-build.ref
+  local sha_file=/tmp/cloudberry-build.sha
+  local pg_major_file=/tmp/cloudberry-build.pg-major
+  if [ ! -e "$ref_file" ] && [ ! -e "$sha_file" ] && [ ! -e "$pg_major_file" ]; then
+    log "Cloudberry build identity is unavailable; skipping expected-version check"
+    return
+  fi
+
+  [ -r "$ref_file" ] || die "Missing Cloudberry build identity: $ref_file"
+  [ -r "$sha_file" ] || die "Missing Cloudberry build identity: $sha_file"
+  [ -r "$pg_major_file" ] || die "Missing Cloudberry build identity: $pg_major_file"
+
+  local expected_ref expected_sha expected_pg_major actual_sha
+  expected_ref=$(<"$ref_file")
+  expected_sha=$(<"$sha_file")
+  expected_pg_major=$(<"$pg_major_file")
+  [ "$actual_pg_major" = "$expected_pg_major" ] ||
+    die "Expected PostgreSQL ${expected_pg_major} from ${expected_ref}, got ${actual_version}"
+
+  if git -C /home/gpadmin/workspace/cloudberry rev-parse HEAD >/dev/null 2>&1; then
+    actual_sha=$(git -C /home/gpadmin/workspace/cloudberry rev-parse HEAD)
+    [ "$actual_sha" = "$expected_sha" ] ||
+      die "Cloudberry package/source mismatch: expected ${expected_sha}, got ${actual_sha}"
+  fi
+  log "verified Cloudberry ref=${expected_ref} commit=${expected_sha} pg_major=${expected_pg_major}"
+}
+
 install_cloudberry_from_package() {
   log "installing Cloudberry from package"
 
-  local pkg_file=""
+  local package_pattern
   if [ "$OS_FAMILY" = "deb" ]; then
-    pkg_file=$(find /tmp -name "apache-cloudberry-db*.deb" 2>/dev/null | head -1)
-    [ -z "$pkg_file" ] && die "No .deb package found in /tmp"
+    package_pattern="apache-cloudberry-db*.deb"
   else
-    pkg_file=$(find /tmp -name "apache-cloudberry-db*.rpm" 2>/dev/null | head -1)
-    [ -z "$pkg_file" ] && die "No .rpm package found in /tmp"
+    package_pattern="apache-cloudberry-db*.rpm"
   fi
+
+  local -a package_files=()
+  mapfile -t package_files < <(find /tmp -maxdepth 1 -type f -name "$package_pattern" -print)
+  if [ "${#package_files[@]}" -ne 1 ]; then
+    find /tmp -maxdepth 1 -type f -name "$package_pattern" -print || true
+    die "Expected exactly one Cloudberry package matching ${package_pattern}, found ${#package_files[@]}"
+  fi
+  local pkg_file=${package_files[0]}
 
   install_build_deps
 
@@ -220,6 +296,7 @@ EOF
 
   # Initialize and start Cloudberry cluster
   source /usr/local/cloudberry-db/cloudberry-env.sh
+  verify_cloudberry_install
   make create-demo-cluster -C ~/workspace/cloudberry || {
     log "create-demo-cluster failed, trying manual setup"
     cd ~/workspace/cloudberry
